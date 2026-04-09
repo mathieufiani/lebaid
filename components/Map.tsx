@@ -1,10 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Resource, Category, Shelter, FoodPoint, Hospital } from "@/lib/supabase";
-
-// Leaflet must be imported client-side only
-let L: typeof import("leaflet");
+import type { Resource, Category, Shelter, FoodPoint, Hospital, Pharmacy } from "@/lib/supabase";
 
 type MapProps = {
   resources: Resource[];
@@ -15,10 +12,10 @@ type MapProps = {
 };
 
 const categoryColors: Record<Category, string> = {
-  shelters: "#3B82F6",  // blue
-  food: "#F59E0B",      // amber
-  hospitals: "#EF4444", // red
-  pharmacy: "#10B981",  // green
+  shelters: "#3B82F6",
+  food: "#F59E0B",
+  hospitals: "#EF4444",
+  pharmacy: "#10B981",
 };
 
 const categoryEmojis: Record<Category, string> = {
@@ -31,6 +28,7 @@ const categoryEmojis: Record<Category, string> = {
 function getStatus(resource: Resource, category: Category): string {
   if (category === "shelters") return (resource as Shelter).status;
   if (category === "food") return (resource as FoodPoint).status;
+  if (category === "pharmacy") return (resource as Pharmacy).status;
   return (resource as Hospital).status;
 }
 
@@ -42,19 +40,23 @@ function isOpen(resource: Resource, category: Category): boolean {
 export default function Map({ resources, category, userLat, userLng, onMarkerClick }: MapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<import("leaflet").Map | null>(null);
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const markersRef = useRef<import("leaflet").Layer[]>([]);
+  const userMarkerRef = useRef<import("leaflet").Layer | null>(null);
 
-  // Initialize map
+  // Initialize map once
   useEffect(() => {
     if (!mapRef.current) return;
+    if ((mapRef.current as unknown as { _leaflet_id?: number })._leaflet_id) return;
+
+    let destroyed = false;
 
     async function initMap() {
-      L = (await import("leaflet")).default;
+      const L = (await import("leaflet")).default;
+      if (destroyed) return;
 
-      // Already initialized (StrictMode double-mount)
-      if ((mapRef.current as unknown as { _leaflet_id?: number })?._leaflet_id) return;
+      leafletRef.current = L;
 
-      // Fix Leaflet default icon paths
       delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
@@ -63,7 +65,7 @@ export default function Map({ resources, category, userLat, userLng, onMarkerCli
       });
 
       const map = L.map(mapRef.current!, {
-        center: [33.8547, 35.8623], // Lebanon center
+        center: [33.8547, 35.8623],
         zoom: 9,
         zoomControl: true,
       });
@@ -79,60 +81,79 @@ export default function Map({ resources, category, userLat, userLng, onMarkerCli
     initMap();
 
     return () => {
+      destroyed = true;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
+        leafletRef.current = null;
       }
     };
   }, []);
 
-  // Update user location marker
+  // User location marker
   useEffect(() => {
-    if (!mapInstanceRef.current || userLat === null || userLng === null) return;
+    if (userLat === null || userLng === null) return;
 
-    async function addUserMarker() {
-      if (!L) L = (await import("leaflet")).default;
-      const map = mapInstanceRef.current!;
+    // Poll until map is ready (handles async init)
+    const interval = setInterval(() => {
+      const L = leafletRef.current;
+      const map = mapInstanceRef.current;
+      if (!L || !map) return;
+
+      clearInterval(interval);
+
+      // Remove previous user marker
+      if (userMarkerRef.current) {
+        map.removeLayer(userMarkerRef.current);
+      }
 
       const userIcon = L.divIcon({
-        html: `<div style="width:16px;height:16px;background:#CC0001;border:3px solid white;border-radius:50%;box-shadow:0 0 0 2px #CC0001"></div>`,
+        html: `<div style="width:16px;height:16px;background:#CC0001;border:3px solid white;border-radius:50%;box-shadow:0 0 0 3px rgba(204,0,1,0.3)"></div>`,
         className: "",
         iconSize: [16, 16],
         iconAnchor: [8, 8],
       });
 
-      L.marker([userLat!, userLng!], { icon: userIcon })
+      userMarkerRef.current = L.marker([userLat, userLng], { icon: userIcon })
         .addTo(map)
         .bindPopup("📍 Vous êtes ici");
 
-      map.setView([userLat!, userLng!], 13);
-    }
+      map.setView([userLat, userLng], 13);
+    }, 100);
 
-    addUserMarker();
+    return () => clearInterval(interval);
   }, [userLat, userLng]);
 
-  // Update resource markers
+  // Resource markers — re-run whenever resources or category changes
   useEffect(() => {
-    if (!mapInstanceRef.current) return;
+    // Poll until map and Leaflet are ready
+    const interval = setInterval(() => {
+      const L = leafletRef.current;
+      const map = mapInstanceRef.current;
+      if (!L || !map) return;
 
-    async function updateMarkers() {
-      if (!L) L = (await import("leaflet")).default;
-      const map = mapInstanceRef.current!;
+      clearInterval(interval);
 
       // Clear old markers
       markersRef.current.forEach((m) => map.removeLayer(m));
       markersRef.current = [];
 
-      const color = categoryColors[category];
-      const emoji = categoryEmojis[category];
+      if (resources.length === 0) return;
 
       resources.forEach((resource) => {
-        const open = isOpen(resource, category);
+        if (!resource.lat || !resource.lng) return;
+
+        // In "all" mode the category prop is "shelters" fallback — derive color from resource shape
+        const resolvedCategory = category;
+        const color = categoryColors[resolvedCategory] ?? "#6B7280";
+        const emoji = categoryEmojis[resolvedCategory] ?? "📍";
+        const open = isOpen(resource, resolvedCategory);
+
         const icon = L.divIcon({
-          html: `<div style="width:36px;height:36px;background:${open ? color : "#9CA3AF"};border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:16px">${emoji}</div>`,
+          html: `<div style="width:32px;height:32px;background:${open ? color : "#9CA3AF"};border:2px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1">${emoji}</div>`,
           className: "",
-          iconSize: [36, 36],
-          iconAnchor: [18, 18],
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
         });
 
         const marker = L.marker([resource.lat, resource.lng], { icon })
@@ -141,9 +162,9 @@ export default function Map({ resources, category, userLat, userLng, onMarkerCli
 
         markersRef.current.push(marker);
       });
-    }
+    }, 100);
 
-    updateMarkers();
+    return () => clearInterval(interval);
   }, [resources, category, onMarkerClick]);
 
   return <div ref={mapRef} style={{ width: "100%", height: "100%" }} />;
