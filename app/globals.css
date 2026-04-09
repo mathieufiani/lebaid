@@ -2,26 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
+@import "leaflet/dist/leaflet.css";
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --lebanon-red: #CC0001;
+  --lebanon-green: #00A651;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* RTL support for Arabic */
+[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
+  background: #ffffff;
+  color: #171717;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+/* Mobile-first full height */
+html,
+body {
+  height: 100%;
+}
+
+/* Leaflet map container */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
 }

@@ -9,8 +9,8 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        "lebanon-red": "#CC0001",
+        "lebanon-green": "#00A651",
       },
     },
   },
